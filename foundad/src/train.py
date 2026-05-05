@@ -14,6 +14,7 @@ from src.utils.logging import CSVLogger, gpu_timer, grad_logger, AverageMeter
 from src.datasets.dataset import build_dataloader
 from src.utils.synthesis import CutPasteUnion
 from src.foundad import VisionModule
+from src.utils.loss_factory import OursTotalLoss
 
 _GLOBAL_SEED = 0
 random.seed(42); np.random.seed(0); torch.manual_seed(0)
@@ -40,7 +41,19 @@ class Trainer:
         if self.model.projector:
             self.model.projector.requires_grad_(True)
         self.loss_mode = args["meta"].get("loss_mode", "l2") # l2 or smooth_l1
-        logger.info(f"Loss mode {self.loss_mode}")
+        
+        # Initialize the improved multi-component loss
+        lcfg = args["meta"].get("loss_config", {})
+        self.total_loss_fn = OursTotalLoss(
+            loss_mode=self.loss_mode,
+            margin=lcfg.get("margin", 1.0),
+            tau=lcfg.get("tau", 0.1),
+            lam1=lcfg.get("lam1", 1.0), # Margin
+            lam3=lcfg.get("lam3", 1.0), # Graph
+            lam4=lcfg.get("lam4", 1.0)  # Energy
+        ).to(self.device)
+        
+        logger.info(f"Loss mode {self.loss_mode} with multi-component integration.")
 
         # ---------- data ----------
         dcfg = args["data"]
@@ -118,11 +131,26 @@ class Trainer:
                 _, imgs_abn = self.cutpaste(imgs, labels) # anomaly synthesis
                 def _step():
                     with autocast(dtype=torch.bfloat16, enabled=self.use_bf16):
-                        if np.random.rand() < 0.5:
-                            h = self.model.target_features(imgs, paths, n_layer=self.n_layer); _, p = self.model.context_features(imgs, paths, n_layer=self.n_layer)
-                        else:
-                            h = self.model.target_features(imgs, paths, n_layer=self.n_layer); _, p = self.model.context_features(imgs_abn, paths, n_layer=self.n_layer)
-                        return self._loss_fn(h, p,)
+                        is_abnormal_batch = np.random.rand() < 0.5
+                        current_imgs = imgs_abn if is_abnormal_batch else imgs
+                        
+                        h = self.model.target_features(imgs, paths, n_layer=self.n_layer)
+                        _, p = self.model.context_features(current_imgs, paths, n_layer=self.n_layer)
+                        
+                        # Create anomaly labels for the batch
+                        is_anomaly = torch.tensor([is_abnormal_batch] * imgs.size(0), device=self.device)
+                        
+                        # Compute simple adjacency matrix based on target features for L_graph
+                        with torch.no_grad():
+                            h_flat = h.mean(dim=1)
+                            h_norm = F.normalize(h_flat, p=2, dim=-1)
+                            adj_matrix = torch.mm(h_norm, h_norm.t()) # Cosine similarity
+                            # Thresholding or softmax to get adjacency
+                            adj_matrix = F.softmax(adj_matrix / 0.1, dim=-1)
+
+                        loss_dict = self.total_loss_fn(h, p, is_anomaly=is_anomaly, adj_matrix=adj_matrix)
+                        return loss_dict["total_loss"]
+
                 (loss,), t = gpu_timer(lambda: [_step()])
                 if self.use_bf16: self.scaler.scale(loss).backward(); self.scaler.step(self.optimizer); self.scaler.update()
                 else: loss.backward(); self.optimizer.step()
