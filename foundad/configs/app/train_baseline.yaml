@@ -1,0 +1,45 @@
+app:
+  write_tag: baseline
+  model: siglip
+  loss_mode: l2
+  n_layer: 3
+  pred_depth: 6
+  pred_emb_dim: 384
+
+data:
+  dataset: mvtec
+  data_name: mvtec_bottle
+  data_path: /path/to/dataset
+  train_root: /path/to/dataset/bottle
+  batch_size: 8
+  pin_mem: True
+  num_workers: 0
+
+meta:
+  model: siglip
+  crop_size: 512
+  feat_normed: False
+  use_bfloat16: False
+  # Chỉ dùng Reconstruction Loss (các trọng số khác = 0)
+  loss_config:
+    lam1: 0.0 # Không Margin
+    lam3: 0.0 # Không Graph
+    lam4: 0.0 # Không Energy
+    margin: 1.0
+    tau: 0.1
+
+optimization:
+  epochs: 500
+  lr: 0.001
+  lr_config: const
+  weight_decay: 0.0001
+
+logging:
+  folder: logs/mvtec_bottle/baseline
+  write_tag: train
+
+testing:
+  segmentation_vis: True
+  expect_fpr: 0.3
+  K_top_mvtec: 10
+  K_top_visa: 6
