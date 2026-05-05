@@ -28,45 +28,48 @@ def generate_target_foreground_mask(img: np.ndarray, subclass: str) -> np.ndarra
 
     img_gray = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
 
-    if subclass in ['carpet', 'leather', 'tile', 'wood', 'cable', 'transistor']:
+    # Hỗ trợ nhận diện các lớp kể cả khi có tiền tố mvtec_ hoặc visa_
+    clean_subclass = subclass.replace('mvtec_', '').replace('visa_', '')
+    
+    if clean_subclass in ['carpet', 'leather', 'tile', 'wood', 'cable', 'transistor']:
         target_foreground_mask = np.ones_like(img_gray)
-    elif subclass == 'pill':
+    elif clean_subclass == 'pill':
         _, target_foreground_mask = cv2.threshold(
             img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         target_foreground_mask = (target_foreground_mask > 0).astype(int)
-    elif subclass in ['hazelnut', 'metal_nut', 'toothbrush']:
+    elif clean_subclass in ['hazelnut', 'metal_nut', 'toothbrush']:
         _, target_foreground_mask = cv2.threshold(
             img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_TRIANGLE)
         target_foreground_mask = (target_foreground_mask > 0).astype(int)
-    elif subclass in ['bottle', 'capsule', 'grid', 'screw', 'zipper']:
+    elif clean_subclass in ['bottle', 'capsule', 'grid', 'screw', 'zipper']:
         _, target_background_mask = cv2.threshold(
             img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         target_background_mask = (target_background_mask > 0).astype(int)
         target_foreground_mask = 1 - target_background_mask
-    elif subclass in ['capsules']:
+    elif clean_subclass in ['capsules']:
         target_foreground_mask = np.ones_like(img_gray)
-    elif subclass in ['pcb1', 'pcb2', 'pcb3', 'pcb4']:
+    elif clean_subclass in ['pcb1', 'pcb2', 'pcb3', 'pcb4']:
         _, target_foreground_mask = cv2.threshold(img_np_uint8[:, :, 2], 100, 255,
                                                     cv2.THRESH_BINARY | cv2.THRESH_TRIANGLE)
         target_foreground_mask = target_foreground_mask.astype(bool).astype(int)
         target_foreground_mask = morphology.closing(target_foreground_mask, morphology.square(8))
         target_foreground_mask = morphology.opening(target_foreground_mask, morphology.square(3))
-    elif subclass in ['candle', 'cashew', 'chewinggum', 'fryum', 'macaroni1', 'macaroni2', 'pipe_fryum']:
+    elif clean_subclass in ['candle', 'cashew', 'chewinggum', 'fryum', 'macaroni1', 'macaroni2', 'pipe_fryum']:
         _, target_foreground_mask = cv2.threshold(img_gray, 100, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         target_foreground_mask = target_foreground_mask.astype(bool).astype(int)
         target_foreground_mask = morphology.closing(target_foreground_mask, morphology.square(3))
         target_foreground_mask = morphology.opening(target_foreground_mask, morphology.square(3))
-    elif subclass in ['bracket_black', 'bracket_brown', 'connector']:
+    elif clean_subclass in ['bracket_black', 'bracket_brown', 'connector']:
         img_seg = img_np_uint8[:, :, 1]
         _, target_background_mask = cv2.threshold(img_seg, 100, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         target_background_mask = target_background_mask.astype(bool).astype(int)
         target_foreground_mask = 1 - target_background_mask
-    elif subclass in ['bracket_white', 'tubes']:
+    elif clean_subclass in ['bracket_white', 'tubes']:
         img_seg = img_np_uint8[:, :, 2]
         _, target_background_mask = cv2.threshold(img_seg, 100, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         target_background_mask = target_background_mask.astype(bool).astype(int)
         target_foreground_mask = target_background_mask
-    elif subclass in ['metal_plate']:
+    elif clean_subclass in ['metal_plate']:
         img_seg = cv2.cvtColor(img_np_uint8, cv2.COLOR_RGB2GRAY)
         _, target_background_mask = cv2.threshold(img_seg, 100, 255, cv2.THRESH_BINARY | cv2.THRESH_OTSU)
         target_background_mask = target_background_mask.astype(bool).astype(int)
