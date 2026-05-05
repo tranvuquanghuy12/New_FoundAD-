@@ -132,7 +132,9 @@ class Trainer:
             logger.info("Epoch %d", ep+1); self.sampler.set_epoch(ep); loss_m, time_m = AverageMeter(), AverageMeter()
             for itr, (imgs, labels, paths) in enumerate(self.loader):
                 imgs = imgs.to(self.device, non_blocking=True)
-                _, imgs_abn = self.cutpaste(imgs, labels) # anomaly synthesis
+                # Sử dụng data_name từ config để synthesis nhận diện đúng loại đối vật (ví dụ: bottle thay vì 'good')
+                subclasses = [self.args["data"]["data_name"]] * imgs.size(0)
+                _, imgs_abn = self.cutpaste(imgs, subclasses) # anomaly synthesis
                 def _step():
                     with autocast(dtype=torch.bfloat16, enabled=self.use_bf16):
                         is_abnormal_batch = np.random.rand() < 0.5
