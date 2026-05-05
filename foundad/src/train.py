@@ -104,7 +104,11 @@ class Trainer:
             str(self.ckpt_dir / f"{self.tag}.csv"),
             ("%d", "epoch"),
             ("%d", "itr"),
-            ("%.5f", "loss"),
+            ("%.5f", "loss_total"),
+            ("%.5f", "l_recon"),
+            ("%.5f", "l_margin"),
+            ("%.5f", "l_graph"),
+            ("%.5f", "l_energy"),
             ("%d", "time (ms)"),
         )
 
@@ -149,15 +153,24 @@ class Trainer:
                             adj_matrix = F.softmax(adj_matrix / 0.1, dim=-1)
 
                         loss_dict = self.total_loss_fn(h, p, is_anomaly=is_anomaly, adj_matrix=adj_matrix)
-                        return loss_dict["total_loss"]
+                        return loss_dict
 
-                (loss,), t = gpu_timer(lambda: [_step()])
+                (loss_dict,), t = gpu_timer(lambda: [_step()])
+                loss = loss_dict["total_loss"]
                 if self.use_bf16: self.scaler.scale(loss).backward(); self.scaler.step(self.optimizer); self.scaler.update()
                 else: loss.backward(); self.optimizer.step()
                 grad_stats = grad_logger(self.model.predictor.named_parameters()); self.optimizer.zero_grad()
                 loss_m.update(loss.item()); time_m.update(t); gstep += 1
                 if gstep % 100 == 0: self._save_ckpt(ep, gstep)
-                self.csv_logger.log(ep+1, itr, loss.item(), t)
+                
+                # Log all loss components
+                self.csv_logger.log(ep+1, itr, 
+                                    loss_dict["total_loss"].item(),
+                                    loss_dict["l_recon"].item(),
+                                    loss_dict["l_margin"].item(),
+                                    loss_dict["l_graph"].item(),
+                                    loss_dict["l_energy"].item(),
+                                    t)
                 if itr % 100 == 0:
                     logger.info("[E %d I %d] loss %.6f (avg %.6f) mem %.2fMB (%.1fms)", ep+1, itr, loss.item(), loss_m.avg, torch.cuda.max_memory_allocated()/1024**2, time_m.avg)
                     if grad_stats:
