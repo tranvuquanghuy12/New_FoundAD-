@@ -1,4 +1,3 @@
-
 import multiprocessing as mp
 from typing import Any, Dict, Tuple, Optional, List
 import importlib   
@@ -23,8 +22,9 @@ class LinearProjector(torch.nn.Module):
 
 
 class VisionModule(nn.Module):
-    def __init__(self, model_name: str, pred_depth: int, pred_emb_dim: int, use_cuda: bool = True, if_pe: bool = True, feat_normed: bool = False):
+    def __init__(self, model_name: str, pred_depth: int, pred_emb_dim: int, use_cuda: bool = True, if_pe: bool = True, feat_normed: bool = False, crop_size: int = 512):
         super().__init__()
+        self.crop_size = crop_size
         (self.encoder, self.num_patches, self.embed_dim, self.processor, self.projector) = self._build_encoder(model_name)
         self.model_name = model_name
 
@@ -40,12 +40,12 @@ class VisionModule(nn.Module):
     def predict(self, z: torch.Tensor) -> torch.Tensor:
         return self.predictor(z)
     
-    def target_features(self, images, paths, n_layer=3):
+    def target_features(self, images, paths, n_layer=3, use_tensor_feat=False):
         with torch.no_grad():
-            return self._extract(images, paths, n_layer=n_layer)
+            return self._extract(images, paths, n_layer=n_layer, use_tensor_feat=use_tensor_feat)
 
-    def context_features(self, images, paths, n_layer=3):
-        z = self._extract(images, paths, n_layer=n_layer)
+    def context_features(self, images, paths, n_layer=3, use_tensor_feat=False):
+        z = self._extract(images, paths, n_layer=n_layer, use_tensor_feat=use_tensor_feat)
         p = self.predictor(self.dropout(z))
         return z, p
 
@@ -53,16 +53,20 @@ class VisionModule(nn.Module):
 
         projector = processor = None
         if model == "dinov2":
-            enc = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14").eval(); num_patches, embed_dim = enc.patch_embed.num_patches, enc.embed_dim
+            enc = torch.hub.load("facebookresearch/dinov2", "dinov2_vitb14").eval(); num_patches, embed_dim = (self.crop_size // 14) ** 2, enc.embed_dim
         elif model == "dinov3":
-            enc = torch.hub.load("facebookresearch/dinov3", 'dinov3_vitb16', source="github").eval()
-            num_patches, embed_dim = enc.patch_embed.num_patches, enc.embed_dim
+            from transformers import AutoModel, AutoProcessor
+            enc = AutoModel.from_pretrained("facebook/dinov3-vitb16-pretrain-lvd1689m").eval()
+            processor = AutoProcessor.from_pretrained("facebook/dinov3-vitb16-pretrain-lvd1689m")
+            # Dynamic size for DINOv3 processor
+            processor.size = {"height": self.crop_size, "width": self.crop_size}
+            num_patches, embed_dim = (self.crop_size // 16) ** 2, 768
         elif model == "dino":
-            enc = torch.hub.load("facebookresearch/dino:main", "dino_vitb16").eval(); num_patches, embed_dim = 1024, enc.embed_dim
+            enc = torch.hub.load("facebookresearch/dino:main", "dino_vitb16").eval(); num_patches, embed_dim = (self.crop_size // 16) ** 2, enc.embed_dim
         elif model == "siglip":
-            enc = SiglipVisionModel.from_pretrained("google/siglip-base-patch16-512").eval(); processor = AutoProcessor.from_pretrained("google/siglip-base-patch16-512"); num_patches, embed_dim = 1024, 768
+            enc = SiglipVisionModel.from_pretrained("google/siglip-base-patch16-512").eval(); processor = AutoProcessor.from_pretrained("google/siglip-base-patch16-512"); num_patches, embed_dim = (self.crop_size // 16) ** 2, 768
         elif model == "clip":
-            enc = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch16").eval(); processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch16"); num_patches, embed_dim = 196, 768
+            enc = CLIPVisionModel.from_pretrained("openai/clip-vit-base-patch16").eval(); processor = AutoProcessor.from_pretrained("openai/clip-vit-base-patch16"); num_patches, embed_dim = (self.crop_size // 16) ** 2, 768
         elif model == "dinosiglip":
             from src.vision_backbone.scripts.vit_inference import init_vit_backbone, Config      
             
@@ -78,17 +82,42 @@ class VisionModule(nn.Module):
                 p.requires_grad = False
         return enc, num_patches, embed_dim, processor, projector
 
-    def _extract(self, imgs: torch.Tensor, paths: List[str], n_layer: int = 3):
+    def _extract(self, imgs: torch.Tensor, paths: List[str], n_layer: int = 3, use_tensor_feat: bool = False):
         if self.model_name == "dinov2":
             h = self.encoder.get_intermediate_layers(imgs, n=n_layer, return_class_token=False)[0] # the thrid last block
         elif self.model_name == "dinov3":
-            h = self.encoder.get_intermediate_layers(imgs, n=n_layer, return_class_token=False)[0] 
+            if use_tensor_feat:
+                pixel_values = imgs # Assuming already normalized by dataset
+            else:
+                pil_list = [Image.open(p).convert("RGB") for p in paths]
+                proc = self.processor(images=pil_list, return_tensors="pt")
+                pixel_values = proc["pixel_values"].to(imgs.device)
+
+            with torch.no_grad():
+                out = self.encoder(pixel_values=pixel_values, output_hidden_states=True)
+                hs = out.hidden_states
+
+            L = len(hs) - 1
+            n = max(1, min(n_layer, L))
+            # DINOv3 has 1 CLS token + 4 register tokens, so patches start at index 5
+            h = hs[-n][:, 5:, :]
         elif self.model_name == "dino":
             h = self.encoder.get_intermediate_layers(imgs, n=n_layer)[0][:,1:,:]
         elif self.model_name == "siglip":
-            pil_list = [Image.open(p).convert("RGB") for p in paths]
-            proc = self.processor(images=pil_list, return_tensors="pt")
-            pixel_values = proc["pixel_values"].to(imgs.device)
+            if use_tensor_feat:
+                # Optimized for training: Use the provided imgs tensor directly
+                # Step 1: Un-normalize from ImageNet stats (Dataset default) back to [0, 1]
+                mean = torch.tensor([0.485, 0.456, 0.406], device=imgs.device).view(1, 3, 1, 1)
+                std = torch.tensor([0.229, 0.224, 0.225], device=imgs.device).view(1, 3, 1, 1)
+                unnormalized_imgs = imgs * std + mean
+                
+                # Step 2: Re-normalize for SigLIP [0.5, 0.5, 0.5]
+                pixel_values = (unnormalized_imgs - 0.5) / 0.5
+            else:
+                # Baseline Paper logic: Reload from disk (ignores on-the-fly augmentations/synthesis)
+                pil_list = [Image.open(p).convert("RGB") for p in paths]
+                proc = self.processor(images=pil_list, return_tensors="pt")
+                pixel_values = proc["pixel_values"].to(imgs.device)
 
             with torch.no_grad():
                 out = self.encoder(pixel_values=pixel_values, output_hidden_states=True)

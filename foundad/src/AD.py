@@ -59,7 +59,15 @@ def _evaluate_single_ckpt(ckpt: Path, cfg: Dict[str, Any]) -> None:
         K = cfg["testing"]["K_top_visa"]
     else:
         raise NotImplementedError
-    assert dataset_name in cfg["data"]["test_root"] # check if eval on the same dataset the ckpt trained on
+
+    # Chỉ lấy đúng class name mà mình đang muốn eval (ví dụ: bottle)
+    # thay vì chạy cả list 15 class
+    specific_class = cfg["data"].get("data_name")
+    if specific_class and specific_class in classnames:
+        classnames = [specific_class]
+    else:
+        print(f"⚠️ Cảnh báo: Không tìm thấy class '{specific_class}' trong danh sách. Sẽ chạy toàn bộ.")
+    assert dataset_name.lower() in cfg["data"]["test_root"].lower() # check if eval on the same dataset the ckpt trained on
 
     
     logger.info(f"Evaluating {ckpt.name} on {dataset_name}")
@@ -161,7 +169,7 @@ def _demo(ckpt: Path, cfg: Dict[str, Any]) -> None:
     out_root.mkdir(parents=True, exist_ok=True)
 
     dataset_name = cfg["data"].get("dataset", "mvtec")
-    assert dataset_name in cfg["data"]["test_root"] # check if eval on the same dataset the ckpt trained on
+    assert dataset_name.lower() in cfg["data"]["test_root"].lower() # check if eval on the same dataset the ckpt trained on
     
     test_root = Path(cfg["data"]["test_root"])
     exts = ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tif", "*.tiff", "*.webp", "*.JPG", "*.JPEG", "*.PNG", "*.BMP", "*.TIF", "*.TIFF", "*.WEBP")

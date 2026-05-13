@@ -1,0 +1,60 @@
+#!/bin/bash
+
+PROJECT_ROOT="/home/ptitdemo/TVQH_TLU/Research Project 2/Ours"
+cd "$PROJECT_ROOT"
+
+# Kill any processes hanging on these ports
+fuser -k 40112/tcp 40113/tcp || pkill -9 python
+
+CLASSES=("bottle")
+DATA_PATH="/home/ptitdemo/TVQH_TLU/Research Project 2/Dataset/MVTec AD"
+EPOCHS=50
+
+# SỬ DỤNG GIỜ VIỆT NAM (GMT+7) CHO TÊN FOLDER
+TIMESTAMP=$(TZ='Asia/Ho_Chi_Minh' date +"%Hh%M_%d-%m-%Y")
+
+RUN_ID=1
+if [ -d "logs" ]; then
+    EXISTING_RUNS=$(ls logs | grep "dinov3_" | wc -l)
+    RUN_ID=$((EXISTING_RUNS + 1))
+fi
+RUN_NAME="dinov3_${RUN_ID}-${TIMESTAMP}"
+
+echo "=========================================================="
+echo "START EXPERIMENT 001 | SESSION: $RUN_NAME"
+echo "=========================================================="
+
+for CLASS in "${CLASSES[@]}"; do
+    echo "Processing Class: $CLASS"
+
+    # Baseline
+    "$PROJECT_ROOT/venv/bin/python" foundad/main.py mode=train app=train_dinov3 \
+        data.data_name=$CLASS \
+        data.data_path="$DATA_PATH" \
+        data.test_root="$DATA_PATH" \
+        optimization.epochs=$EPOCHS \
+        app.meta.loss_config.lam1=0 \
+        app.meta.loss_config.lam3=0 \
+        app.meta.loss_config.lam4=0 \
+        dist.master_port=40112 \
+        +run_name="$RUN_NAME" \
+        +variant="Baseline" &
+
+    # Ours
+    "$PROJECT_ROOT/venv/bin/python" foundad/main.py mode=train app=train_dinov3 \
+        data.data_name=$CLASS \
+        data.data_path="$DATA_PATH" \
+        data.test_root="$DATA_PATH" \
+        optimization.epochs=$EPOCHS \
+        dist.master_port=40113 \
+        +run_name="$RUN_NAME" \
+        +variant="Ours" &
+
+    wait
+    echo "Done Class: $CLASS"
+done
+
+echo "=========================================================="
+echo "EXPERIMENT 001 COMPLETED!"
+echo "Logs saved to: logs/$RUN_NAME"
+echo "=========================================================="

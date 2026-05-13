@@ -29,7 +29,10 @@ def process_main(rank: int, cfg_dict: dict, world_size: int):
     dist = cfg_dict.get("dist", {})
     master_addr = dist.get("master_addr", "localhost")
     master_port = str(dist.get("master_port", 40112))
+    import platform
     backend = dist.get("backend", "nccl")
+    if platform.system() == "Windows":
+        backend = "gloo"
 
     dev_str = devices[rank]
     os.environ["CUDA_VISIBLE_DEVICES"] = str(dev_str.split(":")[-1])
@@ -62,32 +65,55 @@ def process_main(rank: int, cfg_dict: dict, world_size: int):
 
         app_main_mvtec(args=params)
     elif mode == "AD":
-        load_path = os.path.join('logs', cfg_dict['data']['data_name'], params.get('model_name','')+cfg_dict['diy_name'])
-        saved_path = os.path.join(load_path,"params.yaml")
+        run_name = cfg_dict.get("run_name")
+        variant = cfg_dict.get("variant", "Ours")
+        data_name = cfg_dict['data']['data_name']
+        
+        if run_name:
+            load_path = os.path.join('logs', run_name, variant, data_name)
+        else:
+            load_path = os.path.join('logs', data_name, params.get('model_name','')+cfg_dict['diy_name'])
+            
+        saved_path = os.path.join(load_path, "params.yaml")
         if os.path.exists(saved_path):
             with open(saved_path, "r") as f:
                 saved_params = yaml.safe_load(f)
-                assert cfg_dict['diy_name']==saved_params['diy_name']
-                params['meta'] = saved_params['meta']
-                params["ckpt_path"] = os.path.join(saved_params["logging"]["folder"],f"train-step{params['ckpt_step']}.pth.tar")
-                params["logging"]["folder"] = os.path.join(saved_params["logging"]["folder"],f"eval/{str(params['ckpt_step'])}")
+            
+            # Merge saved meta into current params
+            params['meta'] = saved_params.get('meta', {})
+            
+            # Set checkpoint path
+            ckpt_epoch = params.get('ckpt_epoch', 50)
+            params["ckpt_path"] = os.path.join(load_path, f"train-epoch{ckpt_epoch}.pth.tar")
+            params["logging"]["folder"] = os.path.join(load_path, f"eval/{str(ckpt_epoch)}")
+            
+            print(f"🚀 [AD Mode] Loading weights from: {params['ckpt_path']}")
             AD(args=params)
         else:
-            print("No ckpt path is found.")
+            print(f"❌ No params.yaml found at {saved_path}")
     elif mode == "demo":
-        load_path = os.path.join('logs', cfg_dict['data']['data_name'], params.get('model_name','')+cfg_dict['diy_name'])
-        saved_path = os.path.join(load_path,"params.yaml")
+        run_name = cfg_dict.get("run_name")
+        variant = cfg_dict.get("variant", "Ours")
+        data_name = cfg_dict['data']['data_name']
+        
+        if run_name:
+            load_path = os.path.join('logs', run_name, variant, data_name)
+        else:
+            load_path = os.path.join('logs', data_name, params.get('model_name','')+cfg_dict['diy_name'])
+            
+        saved_path = os.path.join(load_path, "params.yaml")
         if os.path.exists(saved_path):
             with open(saved_path, "r") as f:
                 saved_params = yaml.safe_load(f)
-                assert cfg_dict['diy_name']==saved_params['diy_name']
-                params['meta'] = saved_params['meta']
-                params["ckpt_path"] = os.path.join(saved_params["logging"]["folder"],f"pretrained.pth.tar")
-                params["logging"]["folder"] = os.path.join(saved_params["logging"]["folder"],"demo")
-            print(f"loading {params['ckpt_path']}...")
+            
+            params['meta'] = saved_params.get('meta', {})
+            params["ckpt_path"] = os.path.join(load_path, f"train-epoch50.pth.tar") # Default to 50
+            params["logging"]["folder"] = os.path.join(load_path, "demo")
+            
+            print(f"📺 [Demo Mode] Loading {params['ckpt_path']}...")
             _demo(params["ckpt_path"], params)
         else:
-            print("No ckpt is found.")
+            print(f"❌ No ckpt found at {saved_path}")
     else:
         if rank == 0:
             logger.error(f"Unknown mode: {mode}")
@@ -96,6 +122,32 @@ def process_main(rank: int, cfg_dict: dict, world_size: int):
 def main(cfg: DictConfig):
 
     cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+
+    mode = cfg_dict.get("mode", "train")
+    if mode == "train":
+        import datetime
+        now = datetime.datetime.now()
+        timestamp = now.strftime("%Hh%M_%d-%m-%Y")
+        
+        data_name = cfg_dict.get("data", {}).get("data_name", "dataset")
+        model_name = cfg_dict.get("app", {}).get("meta", {}).get("model", "model")
+        
+        # New structure logic
+        run_name = cfg_dict.get("run_name")
+        if run_name is None:
+            base_logs = "logs"
+            run_idx = 1
+            if os.path.exists(base_logs):
+                existing = [d for d in os.listdir(base_logs) if d.startswith(model_name)]
+                run_idx = len(existing) + 1
+            run_name = f"{model_name}_{run_idx}-{timestamp}"
+        
+        variant = cfg_dict.get("variant", "default")
+        
+        # logs/dinov3_1-18h06.../Ours/bottle
+        if "logging" not in cfg_dict["app"]:
+            cfg_dict["app"]["logging"] = {}
+        cfg_dict["app"]["logging"]["folder"] = os.path.join("logs", run_name, variant, data_name)
 
     devices = cfg_dict.get("devices", ["cuda:0"])
     world_size = len(devices)

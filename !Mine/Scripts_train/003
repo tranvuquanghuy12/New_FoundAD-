@@ -1,0 +1,73 @@
+#!/bin/bash
+
+# ==========================================================
+# EXPERIMENT 003: NEGATIVE MARGIN & TIGHT GRAPH PULL
+# TARGET: PREVENT LAZY MODEL, ENFORCE ROBUST TSNE SEPARATION
+# ==========================================================
+
+PROJECT_ROOT="/home/ptitdemo/TVQH_TLU/Research Project 2/Ours"
+DATA_PATH="/home/ptitdemo/TVQH_TLU/Research Project 2/Dataset/MVTec AD"
+EPOCHS=50
+RUN_NAME="exp003_$(date +%Hh%M_%d-%m-%Y)"
+CLASSES=("cable" "transistor")
+
+# Activate environment
+source "$PROJECT_ROOT/venv/bin/activate"
+
+cd "$PROJECT_ROOT" || exit
+
+echo "Starting Experiment 003..."
+echo "Run Name: $RUN_NAME"
+echo "Target Classes: ${CLASSES[*]}"
+echo "Key Config: margin=-0.2 | lam3(Graph)=1.0"
+echo "=========================================================="
+
+PORT_B=40312
+PORT_O=40313
+
+for CLASS in "${CLASSES[@]}"; do
+    echo "Processing Class: $CLASS"
+
+    # 1. Baseline (Reconstruction Only)
+    echo "Running Baseline for $CLASS..."
+    python foundad/main.py mode=train app=train_dinov3 \
+        data.data_name=$CLASS \
+        data.data_path="$DATA_PATH" \
+        data.train_root="$DATA_PATH/$CLASS" \
+        data.test_root="$DATA_PATH" \
+        optimization.epochs=$EPOCHS \
+        app.meta.feat_normed=true \
+        app.meta.loss_config.lam1=0 \
+        app.meta.loss_config.lam3=0 \
+        app.meta.loss_config.lam4=0 \
+        dist.master_port=$PORT_B \
+        +run_name="$RUN_NAME" \
+        +variant="Baseline" &
+
+    # 2. Ours (Negative Margin + Tight Graph)
+    echo "Running Ours v3 for $CLASS..."
+    python foundad/main.py mode=train app=train_dinov3 \
+        data.data_name=$CLASS \
+        data.data_path="$DATA_PATH" \
+        data.train_root="$DATA_PATH/$CLASS" \
+        data.test_root="$DATA_PATH" \
+        optimization.epochs=$EPOCHS \
+        app.meta.feat_normed=true \
+        app.meta.loss_config.margin=-0.2 \
+        app.meta.loss_config.lam1=0.1 \
+        app.meta.loss_config.lam3=1.0 \
+        app.meta.loss_config.lam4=0.01 \
+        dist.master_port=$PORT_O \
+        +run_name="$RUN_NAME" \
+        +variant="Ours" &
+
+    wait
+    echo "Done Class: $CLASS"
+    PORT_B=$((PORT_B+2))
+    PORT_O=$((PORT_O+2))
+done
+
+echo "=========================================================="
+echo "EXPERIMENT 003 COMPLETED!"
+echo "Logs saved to: logs/$RUN_NAME"
+echo "=========================================================="

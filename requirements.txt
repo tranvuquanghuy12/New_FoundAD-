@@ -1,40 +1,40 @@
 
-# python==3.8.19
-numpy==1.24.4
-pandas==2.0.3
-scipy==1.10.1
-scikit-learn==1.3.2
-matplotlib==3.7.5
+# python
+numpy
+pandas
+scipy
+scikit-learn
+matplotlib
 
 
-einops==0.8.0
-pytorch-lightning==2.4.0
-tensorboard==2.14.0
-torchmetrics==1.5.2
+einops
+pytorch-lightning
+tensorboard
+torchmetrics
 
-opencv-python==4.6.0.66
-imageio==2.35.1
-scikit-image==0.21.0
-pywavelets==1.4.1
+opencv-python
+imageio
+scikit-image
+pywavelets
 
-transformers==4.46.3
-huggingface-hub==0.28.1
+transformers
+huggingface-hub
 
 
-timm==1.0.14
-omegaconf==2.3.0
-segment-anything==1.0
-pretrainedmodels==0.7.4
-grad-cam==1.4.3
+timm
+omegaconf
+segment-anything
+pretrainedmodels
+grad-cam
 
-tqdm==4.66.6
-requests==2.32.3
-protobuf==5.28.3
-six==1.16.0
+tqdm
+requests
+protobuf
+six
 
-hydra-core==1.3
+hydra-core
 
 sentencepiece
 
 
-# conda install pytorch==2.2.0 torchvision==0.17.0 torchaudio==2.2.0 pytorch-cuda=11.8 -c pytorch -c nvidia
+# conda install pytorch

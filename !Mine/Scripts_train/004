@@ -1,0 +1,64 @@
+#!/bin/bash
+
+# ==========================================================
+# EXPERIMENT 004 v2: MAX PERFORMANCE PIPELINE
+# OPTIMIZED FOR: 12GB VRAM & MULTI-CORE CPU
+# ==========================================================
+
+PROJECT_ROOT="/home/ptitdemo/TVQH_TLU/Research Project 2/Ours"
+DATA_PATH="/home/ptitdemo/TVQH_TLU/Research Project 2/Dataset/MVTec AD"
+EPOCHS=50
+RUN_NAME="exp004_MaxPerf_$(TZ='Asia/Ho_Chi_Minh' date +%Hh%M_%d-%m-%Y)"
+CLASS="cable"
+VARIANT="Ours_Fix_v2"
+
+# Activate environment
+source "$PROJECT_ROOT/venv/bin/activate"
+cd "$PROJECT_ROOT" || exit
+
+echo "=========================================================="
+echo "🚀 STARTING MAX PERFORMANCE PIPELINE: $CLASS"
+echo "=========================================================="
+
+# 1. RUN TRAINING (Optimized Batch & Workers)
+echo "[1/3] Training $CLASS for $EPOCHS epochs (Batch 16, Workers 4)..."
+python foundad/main.py mode=train app=train_dinov3 \
+    data.data_name=$CLASS \
+    data.data_path="$DATA_PATH" \
+    data.train_root="$DATA_PATH/$CLASS" \
+    data.test_root="$DATA_PATH" \
+    data.batch_size=16 \
+    data.num_workers=4 \
+    optimization.epochs=$EPOCHS \
+    app.meta.feat_normed=true \
+    app.meta.loss_config.margin=0.5 \
+    app.meta.loss_config.lam1=0.1 \
+    app.meta.loss_config.lam3=0.1 \
+    app.meta.loss_config.lam4=0.01 \
+    dist.master_port=40601 \
+    +run_name="$RUN_NAME" \
+    +variant="$VARIANT"
+
+# 2. DEFINE CHECKPOINT PATH
+CKPT_PATH="$PROJECT_ROOT/logs/$RUN_NAME/$VARIANT/$CLASS/train-epoch50.pth.tar"
+
+if [ ! -f "$CKPT_PATH" ]; then
+    echo "❌ Error: Checkpoint not found at $CKPT_PATH"
+    exit 1
+fi
+
+echo "=========================================================="
+echo "✅ TRAINING COMPLETED. STARTING ANALYSIS..."
+echo "=========================================================="
+
+# 3. RUN DRAW PLOT
+echo "[2/3] Running Draw_plot.py..."
+echo "$CKPT_PATH" | python Draw_plot.py
+
+# 4. RUN EVAL CKPT
+echo "[3/3] Running Eval_ckpt.py..."
+echo "$CKPT_PATH" | python Eval_ckpt.py
+
+echo "=========================================================="
+echo "🎉 ALL DONE! Check your logs in: logs/$RUN_NAME"
+echo "=========================================================="

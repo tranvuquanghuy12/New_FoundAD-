@@ -1,0 +1,46 @@
+app:
+  write_tag: ours_margin_only
+  model: dinov3
+  loss_mode: l2
+
+data:
+  dataset: mvtec
+  data_name: mvtec_bottle
+  data_path: /path/to/dataset
+  train_root: /path/to/dataset/bottle
+  batch_size: 8
+  pin_mem: True
+  num_workers: 0
+
+meta:
+  model: dinov3
+  crop_size: 512
+  feat_normed: True
+  use_bfloat16: False
+  use_tensor_feat: True
+  n_layer: 3
+  pred_depth: 6
+  pred_emb_dim: 384
+  # CHỈ DÙNG MARGIN
+  loss_config:
+    lam1: 1.0 # Margin ON
+    lam3: 0.0 # Graph OFF
+    lam4: 0.0 # Energy OFF
+    margin: 1.0
+    tau: 0.1
+
+optimization:
+  epochs: 200 # Chạy ablation chỉ cần 200 epoch là đủ thấy xu hướng
+  lr: 0.001
+  lr_config: const
+  weight_decay: 0.0001
+
+logging:
+  folder: logs/mvtec_bottle/ablation_margin
+  write_tag: train
+
+testing:
+  segmentation_vis: True
+  expect_fpr: 0.3
+  K_top_mvtec: 10
+  K_top_visa: 6

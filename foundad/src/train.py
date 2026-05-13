@@ -34,7 +34,7 @@ class Trainer:
         # ---------- model ----------
         mcfg = args["meta"]
         self.model = VisionModule(
-            mcfg["model"], mcfg["pred_depth"], mcfg["pred_emb_dim"], if_pe=mcfg.get("if_pred_pe", True), feat_normed=mcfg.get("feat_normed", False),
+            mcfg["model"], mcfg["pred_depth"], mcfg["pred_emb_dim"], if_pe=mcfg.get("if_pred_pe", True), feat_normed=mcfg.get("feat_normed", False), crop_size=mcfg.get("crop_size", 512)
         )
         self.n_layer = args["meta"].get("n_layer", 3)
         self.model.predictor.requires_grad_(True)
@@ -57,7 +57,7 @@ class Trainer:
 
         # ---------- data ----------
         dcfg = args["data"]
-        assert dcfg["dataset"] in dcfg["data_name"] # check if the dataset aligns with the few-shot folder
+        # assert dcfg["dataset"] in dcfg["data_name"] # check if the dataset aligns with the few-shot folder
         _, self.loader, self.sampler = build_dataloader(
             mode="train",
             root=dcfg["train_root"],
@@ -120,8 +120,8 @@ class Trainer:
         else:
             raise NotImplementedError(f"Loss mode {self.loss_mode} not implemented")
 
-    def _save_ckpt(self, ep, step=None):
-        name = f"{self.tag}-step{step}.pth.tar" if step else f"{self.tag}-ep{ep}.pth.tar"
+    def _save_ckpt(self, ep):
+        name = f"{self.tag}-epoch{ep}.pth.tar"
         torch.save({"predictor": self.model.predictor.state_dict(),
                     "projector": self.model.projector.state_dict() if self.model.projector else None,
                     "epoch": ep, "lr": self.optimizer.param_groups[0]["lr"]}, self.ckpt_dir/name)
@@ -134,14 +134,18 @@ class Trainer:
                 imgs = imgs.to(self.device, non_blocking=True)
                 # Sử dụng data_name từ config để synthesis nhận diện đúng loại đối vật (ví dụ: bottle thay vì 'good')
                 subclasses = [self.args["data"]["data_name"]] * imgs.size(0)
-                _, imgs_abn = self.cutpaste(imgs, subclasses) # anomaly synthesis
+                _, imgs_abn, masks_abn = self.cutpaste(imgs, subclasses) # anomaly synthesis
                 def _step():
                     with autocast(dtype=torch.bfloat16, enabled=self.use_bf16):
                         is_abnormal_batch = np.random.rand() < 0.5
                         current_imgs = imgs_abn if is_abnormal_batch else imgs
+                        batch_masks = masks_abn.to(self.device) if is_abnormal_batch else torch.zeros_like(masks_abn).to(self.device)
                         
-                        h = self.model.target_features(imgs, paths, n_layer=self.n_layer)
-                        _, p = self.model.context_features(current_imgs, paths, n_layer=self.n_layer)
+                        use_tensor = self.args["meta"].get("use_tensor_feat", False)
+                        h = self.model.target_features(imgs, paths, n_layer=self.n_layer, use_tensor_feat=use_tensor)
+                        # enc_context: features của ảnh đầu vào (clean hoặc anomalous)
+                        # Đây là enc_abn khi is_abnormal_batch=True — dùng cho Self-Distance Loss
+                        enc_context, p = self.model.context_features(current_imgs, paths, n_layer=self.n_layer, use_tensor_feat=use_tensor or is_abnormal_batch)
                         
                         # Create anomaly labels for the batch
                         is_anomaly = torch.tensor([is_abnormal_batch] * imgs.size(0), device=self.device)
@@ -154,7 +158,13 @@ class Trainer:
                             # Thresholding or softmax to get adjacency
                             adj_matrix = F.softmax(adj_matrix / 0.1, dim=-1)
 
-                        loss_dict = self.total_loss_fn(h, p, is_anomaly=is_anomaly, adj_matrix=adj_matrix)
+                        loss_dict = self.total_loss_fn(
+                            h, p,
+                            is_anomaly=is_anomaly,
+                            adj_matrix=adj_matrix,
+                            mask=batch_masks,
+                            enc_context=enc_context,   # <-- KEY FIX: truyền enc_context
+                        )
                         return loss_dict
 
                 (loss_dict,), t = gpu_timer(lambda: [_step()])
@@ -163,7 +173,6 @@ class Trainer:
                 else: loss.backward(); self.optimizer.step()
                 grad_stats = grad_logger(self.model.predictor.named_parameters()); self.optimizer.zero_grad()
                 loss_m.update(loss.item()); time_m.update(t); gstep += 1
-                if gstep % 100 == 0: self._save_ckpt(ep, gstep)
                 
                 # Log all loss components
                 self.csv_logger.log(ep+1, itr, 
@@ -183,6 +192,7 @@ class Trainer:
                 loss_m.avg,
                 self.optimizer.param_groups[0]['lr']
             )
+            self._save_ckpt(ep + 1)
             if self.scheduler is not None:
                 self.scheduler.step()
 

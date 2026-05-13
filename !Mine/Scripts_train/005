@@ -1,0 +1,60 @@
+#!/bin/bash
+
+# ==========================================================
+# EXPERIMENT 005: SELF-DISTANCE ANOMALY PUSH (FIX SCORE INVERSION)
+# Fixes:
+#   1. margin=-0.5 -> margin=0.5 (relu was always 0 before)
+#   2. Loss now measures ||enc_abn - pred(enc_abn)|| instead of
+#      ||enc_clean - pred(enc_abn)|| -> directly optimizes test metric
+#   3. enc_context is now passed from train.py to loss_factory
+# ==========================================================
+
+PROJECT_ROOT="/home/ptitdemo/TVQH_TLU/Research Project 2/Ours"
+DATA_PATH="/home/ptitdemo/TVQH_TLU/Research Project 2/Dataset/MVTec AD"
+EPOCHS=50
+RUN_NAME="exp005_SelfDist_$(TZ='Asia/Ho_Chi_Minh' date +%Hh%M_%d-%m-%Y)"
+VARIANT="Ours_v5_SelfDist"
+
+source "$PROJECT_ROOT/venv/bin/activate"
+cd "$PROJECT_ROOT" || exit
+
+run_class() {
+    local CLASS=$1
+    local PORT=$2
+    echo "=========================================================="
+    echo "🚀 Training: $CLASS"
+    echo "=========================================================="
+    python foundad/main.py mode=train app=train_dinov3 \
+        data.data_name=$CLASS \
+        data.data_path="$DATA_PATH" \
+        data.train_root="$DATA_PATH/$CLASS" \
+        data.test_root="$DATA_PATH" \
+        data.batch_size=16 \
+        data.num_workers=4 \
+        optimization.epochs=$EPOCHS \
+        app.meta.feat_normed=true \
+        app.meta.loss_config.margin=0.5 \
+        app.meta.loss_config.lam1=2.0 \
+        app.meta.loss_config.lam3=0.5 \
+        app.meta.loss_config.lam4=0.01 \
+        dist.master_port=$PORT \
+        +run_name="$RUN_NAME" \
+        +variant="$VARIANT"
+
+    CKPT="$PROJECT_ROOT/logs/$RUN_NAME/$VARIANT/$CLASS/train-epoch${EPOCHS}.pth.tar"
+    if [ -f "$CKPT" ]; then
+        echo "📊 Evaluating $CLASS epoch $EPOCHS..."
+        echo "$CKPT" | python Eval_ckpt.py
+    else
+        echo "❌ Checkpoint not found: $CKPT"
+    fi
+}
+
+run_class "cable"   40701
+run_class "bottle"  40702
+run_class "capsule" 40703
+
+echo "=========================================================="
+echo "🎉 EXPERIMENT 005 COMPLETED!"
+echo "Logs: logs/$RUN_NAME"
+echo "=========================================================="

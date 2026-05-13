@@ -107,17 +107,20 @@ class CutPasteNormal(CutPaste):
     def __call__(self, imgs, subclass):
         batch_size, _, h, w = imgs.shape
         augmented_imgs = imgs.clone()
+        augmented_masks = torch.zeros((batch_size, 1, h, w), device=imgs.device)
 
         for i in range(batch_size):
             img = imgs[i]
-            augmented = self.process_image(img, subclass)
+            augmented, mask = self.process_image(img, subclass)
             augmented_imgs[i] = augmented
+            augmented_masks[i] = mask
 
-        return imgs, augmented_imgs
+        return imgs, augmented_imgs, augmented_masks
 
     def process_image(self, img, subclass):
         img = img.clone()
         _, h, w = img.shape
+        mask = torch.zeros((1, h, w), device=img.device)
 
         target_foreground_mask = generate_target_foreground_mask(img, subclass)  # [H, W]
 
@@ -130,7 +133,7 @@ class CutPasteNormal(CutPaste):
         cut_h = int(round(math.sqrt(target_area / aspect_ratio)))
 
         if cut_w <= 0 or cut_h <= 0:
-            return img
+            return img, mask
 
         from_x = random.randint(0, w - cut_w)
         from_y = random.randint(0, h - cut_h)
@@ -142,7 +145,7 @@ class CutPasteNormal(CutPaste):
 
         mask_indices = np.argwhere(target_foreground_mask == 1)
         if len(mask_indices) == 0:
-            return img 
+            return img, mask 
 
         valid_indices = []
         for y, x in mask_indices:
@@ -150,14 +153,15 @@ class CutPasteNormal(CutPaste):
                 valid_indices.append((y, x))
 
         if len(valid_indices) == 0:
-            return img  
+            return img, mask  
 
         to_y, to_x = random.choice(valid_indices)
 
         augmented = img.clone()
         augmented[:, to_y:to_y+cut_h, to_x:to_x+cut_w] = patch
+        mask[:, to_y:to_y+cut_h, to_x:to_x+cut_w] = 1.0
 
-        return augmented
+        return augmented, mask
 
 class CutPasteScar(CutPaste):
     def __init__(self, width=[2, 16], height=[10, 25], rotation=[-45, 45], **kwargs):
@@ -169,17 +173,20 @@ class CutPasteScar(CutPaste):
     def __call__(self, imgs, subclass):
         batch_size, _, h, w = imgs.shape
         augmented_imgs = imgs.clone()
+        augmented_masks = torch.zeros((batch_size, 1, h, w), device=imgs.device)
 
         for i in range(batch_size):
             img = imgs[i]
-            augmented = self.process_image(img, subclass)
+            augmented, mask = self.process_image(img, subclass)
             augmented_imgs[i] = augmented
+            augmented_masks[i] = mask
 
-        return imgs, augmented_imgs
+        return imgs, augmented_imgs, augmented_masks
 
     def process_image(self, img, subclass):
         img = img.clone()
         _, h, w = img.shape
+        final_mask = torch.zeros((1, h, w), device=img.device)
 
         target_foreground_mask = generate_target_foreground_mask(img, subclass)
     
@@ -187,7 +194,7 @@ class CutPasteScar(CutPaste):
         cut_h = int(random.uniform(*self.height))
 
         if cut_w <= 0 or cut_h <= 0:
-            return img
+            return img, final_mask
 
         from_x = random.randint(0, w - cut_w)
         from_y = random.randint(0, h - cut_h)
@@ -198,16 +205,18 @@ class CutPasteScar(CutPaste):
             patch = self.colorJitter(patch)
 
         rot_deg = random.uniform(*self.rotation)
+        # Tạo mask của patch trước khi xoay
+        patch_mask = torch.ones((1, cut_h, cut_w), device=img.device)
+        
+        # Xoay cả patch và mask
         patch = TF.rotate(patch, angle=rot_deg, interpolation=TF.InterpolationMode.BILINEAR, expand=True)
+        patch_mask = TF.rotate(patch_mask, angle=rot_deg, interpolation=TF.InterpolationMode.NEAREST, expand=True)
 
         _, patch_h, patch_w = patch.shape
 
-        to_x = random.randint(0, w - patch_w)
-        to_y = random.randint(0, h - patch_h)
-
         mask_indices = np.argwhere(target_foreground_mask == 1)
         if len(mask_indices) == 0:
-            return img  
+            return img, final_mask  
 
         valid_indices = []
         for y, x in mask_indices:
@@ -215,15 +224,17 @@ class CutPasteScar(CutPaste):
                 valid_indices.append((y, x))
 
         if len(valid_indices) == 0:
-            return img  
+            return img, final_mask  
 
         to_y, to_x = random.choice(valid_indices)
 
         augmented = img.clone()
-        mask = torch.ones_like(patch)
-        augmented = self.paste_with_mask(augmented, patch, mask, to_y, to_x)
+        augmented = self.paste_with_mask(augmented, patch, patch_mask, to_y, to_x)
+        
+        # Cập nhật mask tổng thể
+        final_mask[:, to_y:to_y+patch_h, to_x:to_x+patch_w] = patch_mask
 
-        return augmented
+        return augmented, final_mask
 
     def paste_with_mask(self, img, patch, mask, top, left):
         _, h, w = img.shape
@@ -245,16 +256,18 @@ class CutPasteUnion(object):
         self.cutpaste_scar = CutPasteScar(**kwargs)
 
     def __call__(self, imgs, subclasses):
-        batch_size = imgs.shape[0]
+        batch_size, _, h, w = imgs.shape
         augmented_imgs = imgs.clone()
+        augmented_masks = torch.zeros((batch_size, 1, h, w), device=imgs.device)
 
         for i in range(batch_size):
             img = imgs[i].unsqueeze(0)  # [1, C, H, W]
             subclass = subclasses[i]
             if random.random() < 0.5:
-                _, augmented = self.cutpaste_normal(img, subclass)
+                _, augmented, mask = self.cutpaste_normal(img, subclass)
             else:
-                _, augmented = self.cutpaste_scar(img, subclass)
+                _, augmented, mask = self.cutpaste_scar(img, subclass)
             augmented_imgs[i] = augmented.squeeze(0)
+            augmented_masks[i] = mask.squeeze(0)
 
-        return imgs, augmented_imgs
+        return imgs, augmented_imgs, augmented_masks

@@ -7,14 +7,14 @@ meta:
   use_bfloat16: false
   if_pred_pe: false
   n_layer: 3
-  feat_normed: false
+  feat_normed: true
   loss_mode: 'l2'  # l2 or smooth_l1
   loss_config:
-    margin: 1.0
+    margin: 0.5   # MUST be positive for relu to activate. For normalized features, 0.5 is a good start.
     tau: 0.1
-    lam1: 1.0 # Margin
-    lam3: 1.0 # Graph
-    lam4: 1.0 # Energy
+    lam1: 2.0  # Anomaly Push (Self-Distance): core fix, give it more weight
+    lam3: 0.5  # Graph Consistency: regularize normal manifold
+    lam4: 0.01 # Energy Regularizer: keep it tiny, just a nudge
 
 logging:
   folder: logs/${data.data_name}/${app.meta.model}${oc.select:diy_name,""}
